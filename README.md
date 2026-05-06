@@ -90,9 +90,7 @@ TFG-Clustering-Sustitutos-Futbol/
 │   └── TFG.pdf
 │
 ├── R_Script/
-│   ├── Analisis_Descriptivo.R
-│   ├── Clustering.R
-│   ├── PCA.R
+│   ├── TFG_Clustering.R
 │   └── Simulacion_FM.R
 │
 ├── Codigo_Python/
