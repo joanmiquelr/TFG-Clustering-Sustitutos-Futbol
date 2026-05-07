@@ -1,0 +1,497 @@
+---
+title: "Simulación"
+format: html
+editor: visual
+---
+
+```{r}
+library(tidyverse)
+library(GGally)
+library(ggplot2)
+library(ggforce)
+ruta = "C://TFG//Football-Data//Datos_simulacion.csv"
+datos = read.csv(ruta)[1:45,1:9]
+rownames(datos) = datos[,1]
+datos = datos[,2:9]
+datos[1:30,1:6] = lapply(datos[1:30,1:6], function(x) gsub(",", ".", x))
+columnas = c("2025-26",	"2026-27",	"2027-28",	"2028-29",	"2029-30",	"2030-31",	"Escala",	"Temporada de retiro de Raillo")
+colnames(datos) = columnas
+notas_medias = datos[1:15,]
+notas_medias[,1:6] <- lapply(notas_medias[,1:6], function(x) {
+  x <- trimws(x)           # quitar espacios
+  x <- gsub(",", ".", x)   # cambiar coma decimal por punto
+  as.numeric(x)            # convertir a numérico
+})
+numero_partidos = datos[16:30,1:7]
+posiciones = datos[31:45,1:7]
+```
+
+### Notas Medias
+
+```{r notas_medias}
+notas_medias_long$Jugador_partida <- interaction(
+  notas_medias_long$Jugador_base,
+  notas_medias_long$Partida
+)
+
+colores <- c(
+  "#2ca02c","#52c252","#7fd77f","#a7e6a7","#d0f2d0",  # Cresswell
+  "#d62728","#e65555","#ef8585","#f5b1b1","#fbdada",  # Tárrega
+  "#1f77b4","#4c97c8","#79b5db","#a6d1ec","#d3e8f8"   # Idzes
+)
+
+
+ggplot(
+  notas_medias_long,
+  aes(
+    x = Temporada,
+    y = Nota,
+    group = Jugador,
+    color = Jugador_base,
+    linetype = Partida
+  )
+) +
+  geom_line(linewidth = 1) +
+  geom_point(aes(shape = Partida), size = 2) +
+  scale_color_manual(
+    values = c(
+      "Charlie Cresswell" = "#2ca02c",
+      "César Tárrega" = "#d62728",
+      "Jay Idzes" = "#1f77b4"
+    )
+  ) +
+  labs(
+    title = "Nota media por temporada",
+    x = "Temporada",
+    y = "Nota media",
+    color = "Jugador",
+    linetype = "Partida"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(
+  notas_medias_long,
+  aes(
+    x = Temporada,
+    y = Nota,
+    group = Jugador,
+    color = Jugador_base
+  )
+) +
+  geom_line(aes(alpha = Partida), linewidth = 1) +
+  geom_point(aes(alpha = Partida), size = 2) +
+  scale_alpha_manual(values = seq(0.4, 1, length.out = 5), guide = "none") +
+  scale_color_manual(
+    values = c(
+      "Charlie Cresswell" = "#2ca02c",
+      "César Tárrega" = "#d62728",
+      "Jay Idzes" = "#1f77b4"
+    )
+  ) +
+  labs(
+    title = "Nota media por temporada",
+    x = "Temporada",
+    y = "Nota media",
+    color = "Jugador"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(notas_medias_long, aes(x = Temporada, y = Nota, group = Jugador, color = Partida)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~Jugador_base) +
+  scale_y_continuous(
+    breaks = seq(5.8, 7.4, by = 0.2),
+    limits = c(5.8, 7.4)
+  ) +
+  labs(
+    x = "Temporada",
+    y = "Nota media",
+    color = "Partida"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+```{r}
+media_CC = colMeans(notas_medias[1:5,1:6])
+media_CT = colMeans(notas_medias[6:10,1:6])
+media_JI = colMeans(notas_medias[11:15,1:6])
+medias = data.frame(
+  Temporada = colnames(notas_medias)[1:6],
+  "Charlie Cresswell" = media_CC,
+  "César Tarrega" = media_CT,
+  "Jay Idzes" = media_JI
+)
+medias_long = pivot_longer(medias,
+                           cols = -Temporada,
+                           names_to = "Jugador",
+                           values_to = "Nota")
+ggplot(medias_long, aes(x = Temporada, y = Nota, color = Jugador, group = Jugador)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Nota media por temporada",
+    x = "Temporada",
+    y = "Nota media"
+  ) +
+  theme_minimal()
+
+```
+
+### Numero Partidos
+
+```{r}
+numero_partidos[,1:6] <- lapply(numero_partidos[,1:6], as.numeric)
+numero_partidos_long <- numero_partidos %>%
+  rownames_to_column("Jugador") %>%
+  pivot_longer(
+    cols = `2025-26`:`2030-31`,
+    names_to = "Temporada",
+    values_to = "Partidos"
+  )
+
+numero_partidos_long$Jugador_base <- case_when(
+  str_detect(numero_partidos_long$Jugador, "Charlie Cresswell") ~ "Charlie Cresswell",
+  str_detect(numero_partidos_long$Jugador, "César Tárrega") ~ "César Tárrega",
+  str_detect(numero_partidos_long$Jugador, "Jay Idzes") ~ "Jay Idzes"
+)
+
+numero_partidos_long$Partida <- str_extract(numero_partidos_long$Jugador, "[1-5]$")
+numero_partidos_long$Partida <- sub(".* ([0-9]+)$", "\\1", numero_partidos_long$Jugador)
+numero_partidos_long$Partida <- factor(numero_partidos_long$Partida)
+
+ggplot(numero_partidos_long, aes(x = Temporada, y = Partidos, group = Jugador, color = Jugador_base)) +
+  geom_line(linewidth = 0.8, alpha = 0.4) +
+  geom_point(size = 2) +
+  labs(
+    x = "Temporada",
+    y = "Número de partidos",
+    color = "Jugador"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+# Hay puntos superpuestos
+```
+
+```{r}
+ggplot(numero_partidos_long, aes(x = Temporada, y = Partidos, group = Jugador, color = Partida)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  facet_wrap(~Jugador_base) +
+  labs(
+    x = "Temporada",
+    y = "Número de partidos",
+    color = "Partida"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+```{r}
+media_CC = colMeans(numero_partidos[1:5,1:6])
+media_CT = colMeans(numero_partidos[6:10,1:6])
+media_JI = colMeans(numero_partidos[11:15,1:6])
+
+medias_partidos = data.frame(
+  Temporada = colnames(numero_partidos)[1:6],
+  "Charlie Cresswell" = media_CC,
+  "César Tárrega" = media_CT,
+  "Jay Idzes" = media_JI
+)
+
+medias_partidos_long = pivot_longer(
+  medias_partidos,
+  cols = -Temporada,
+  names_to = "Jugador",
+  values_to = "Partidos"
+)
+```
+
+```{r}
+ggplot(medias_partidos_long, aes(x = Temporada, y = Partidos, color = Jugador, group = Jugador)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  labs(
+    title = "Media de partidos por temporada",
+    x = "Temporada",
+    y = "Número medio de partidos",
+    color = "Jugador"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+```{r}
+ggplot(numero_partidos_long,
+       aes(x = Temporada, y = Partidos, fill = Jugador_base)) +
+  geom_boxplot()
+```
+
+### Posicion
+
+```{r}
+posiciones_long <- posiciones %>%
+  rownames_to_column("Jugador") %>%
+  pivot_longer(
+    cols = `2025-26`:`2030-31`,
+    names_to = "Temporada",
+    values_to = "Valor"
+  )
+
+posiciones_long$Jugador_base <- str_extract(posiciones_long$Jugador, "CC|CT|JI")
+
+posiciones_long$Jugador_base <- recode(
+  posiciones_long$Jugador_base,
+  CC = "Charlie Cresswell",
+  CT = "César Tárrega",
+  JI = "Jay Idzes"
+)
+
+posiciones_long$Partida <- str_extract(posiciones_long$Jugador, "[1-5]$")
+
+posiciones_long <- posiciones_long %>%
+  left_join(
+    numero_partidos_long %>% select(Jugador_base, Partida, Temporada, Partidos),
+    by = c("Jugador_base", "Partida", "Temporada")
+  )
+
+# Estado según asteriscos
+posiciones_long$Estado <- case_when(
+  str_detect(posiciones_long$Valor, "\\*\\*\\*") ~ "Europa",
+  posiciones_long$Valor == "**" ~ "Segunda",
+  str_detect(posiciones_long$Valor, "\\*") ~ "Descenso",
+  TRUE ~ "Liga"
+)
+
+# Posición numérica
+posiciones_long$Posicion <- case_when(
+  posiciones_long$Valor == "**" ~ 21,
+  TRUE ~ as.numeric(str_extract(posiciones_long$Valor, "[0-9]+"))
+)
+
+# Nombre del jugador
+posiciones_long$Jugador_base <- str_extract(posiciones_long$Jugador, "CC|CT|JI")
+posiciones_long$Jugador_base <- recode(
+  posiciones_long$Jugador_base,
+  CC = "Charlie Cresswell",
+  CT = "César Tárrega",
+  JI = "Jay Idzes"
+)
+
+# Color según si jugó o no
+posiciones_long$Color_linea <- ifelse(
+  posiciones_long$Partidos == 0,
+  "No jugó",
+  posiciones_long$Jugador_base
+)
+
+# Tamaño de los puntos
+posiciones_long$Tamano <- ifelse(posiciones_long$Estado == "Liga", 2, 3.5)
+
+ggplot(
+  posiciones_long,
+  aes(x = Temporada, y = Posicion, group = Jugador, color = Color_linea)
+) +
+  geom_line(alpha = 0.5) +
+  geom_point(
+    data = subset(posiciones_long, Posicion != 21),
+    aes(shape = Estado, size = Tamano)
+  ) +
+  scale_size_identity() +
+  scale_shape_manual(
+    values = c(
+      "Liga" = 16,
+      "Descenso" = 15,
+      "Segunda" = 21,
+      "Europa" = 18
+    ),
+    breaks = c("Descenso", "Segunda", "Europa")
+  ) +
+  scale_color_manual(
+    values = c(
+      "Charlie Cresswell" = "#2ca02c",
+      "César Tárrega" = "#d62728",
+      "Jay Idzes" = "#1f77b4",
+      "No jugó" = "grey60"
+    )
+  ) +
+  scale_y_reverse(
+    breaks = 1:20,
+    limits = c(21, 1)
+  ) +
+  labs(
+    title = "Posición del Mallorca por temporada en las simulaciones",
+    x = "Temporada",
+    y = "Posición",
+    color = "Jugador",
+    shape = "Situación"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+```{r}
+ggplot(
+  posiciones_long,
+  aes(x = Temporada, y = Posicion, group = Jugador)
+) +
+  geom_line(aes(color = Jugador_base), alpha = 0.5) +
+  geom_point(
+    data = subset(posiciones_long, Posicion != 21 & Partidos != 0),
+    aes(shape = Estado, size = Tamano, color = Jugador_base)
+  ) +
+  geom_point(
+    data = subset(posiciones_long, Posicion != 21 & Partidos == 0),
+    aes(shape = Estado, size = Tamano),
+    color = "black"
+  ) +
+  scale_size_identity() +
+  scale_shape_manual(
+    values = c(
+      "Liga" = 16,
+      "Descenso" = 15,
+      "Segunda" = 21,
+      "Europa" = 18
+    ),
+    breaks = c("Descenso", "Segunda", "Europa")
+  ) +
+  scale_color_manual(
+    values = c(
+      "Charlie Cresswell" = "#2ca02c",
+      "César Tárrega" = "#d62728",
+      "Jay Idzes" = "#1f77b4"
+    )
+  ) +
+  scale_y_reverse(
+    breaks = 1:20,
+    limits = c(21, 1)
+  ) +
+  facet_wrap(~Jugador_base) +
+  guides(color = "none") +
+  labs(
+    x = "Temporada",
+    y = "Posición",
+    shape = "Situación"
+  ) +
+  theme_minimal() +
+  theme(
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+```
+
+```{r}
+ggplot(
+  subset(posiciones_long, !is.na(Partidos) & Posicion != 21),
+  aes(x = Partidos, y = Posicion, color = Jugador_base)
+) +
+  geom_point(aes(shape = Estado), size = 3, alpha = 0.8) +
+  scale_shape_manual(
+    values = c(
+      "Liga" = 16,
+      "Descenso" = 15,
+      "Segunda" = 21,
+      "Europa" = 18
+    ),
+    breaks = c("Descenso", "Segunda", "Europa")
+  ) +
+  scale_y_reverse() +
+  labs(
+    x = "Partidos jugados",
+    y = "Posición final",
+    color = "Jugador",
+    shape = "Situación"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(
+  subset(posiciones_long, !is.na(Partidos) & Posicion != 21),
+  aes(x = Partidos, y = Posicion, color = Jugador_base)
+) +
+  geom_point(aes(shape = Estado), size = 3, alpha = 0.8) +
+  scale_shape_manual(
+    values = c(
+      "Liga" = 16,
+      "Descenso" = 15,
+      "Segunda" = 21,
+      "Europa" = 18
+    ),
+    breaks = c("Descenso", "Segunda", "Europa")
+  ) +
+  scale_y_reverse() +
+  facet_wrap(~Jugador_base) +
+  guides(color = "none") +
+  labs(
+    title = "Relación entre partidos jugados y posición del Mallorca",
+    x = "Partidos jugados",
+    y = "Posición final",
+    shape = "Situación"
+  ) +
+  theme_minimal()
+```
+
+```{r}
+ggplot(
+  subset(posiciones_long, !is.na(Partidos) & !is.na(Posicion) & Posicion != 21),
+  aes(x = Partidos, y = Posicion)
+) +
+  stat_density_2d_filled(contour = TRUE) +
+  scale_y_reverse() +
+  facet_wrap(~Jugador_base) +
+  labs(
+    title = "Densidad de partidos jugados y posición final",
+    x = "Partidos jugados",
+    y = "Posición final",
+    fill = "Densidad"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+```{r}
+posiciones_nota <- posiciones_long %>%
+  left_join(
+    notas_medias_long %>% select(Jugador_base, Partida, Temporada, Nota),
+    by = c("Jugador_base", "Partida", "Temporada")
+  )
+
+ggplot(
+  subset(posiciones_nota, !is.na(Nota) & Posicion != 21),
+  aes(x = Nota, y = Posicion, color = Jugador_base)
+) +
+  geom_point(aes(shape = Estado), size = 3, alpha = 0.8) +
+  scale_shape_manual(
+    values = c(
+      "Liga" = 16,
+      "Descenso" = 15,
+      "Segunda" = 21,
+      "Europa" = 18
+    ),
+    breaks = c("Descenso", "Segunda", "Europa")
+  ) +
+  scale_y_reverse() +
+  labs(
+    x = "Nota media",
+    y = "Posición final",
+    color = "Jugador",
+    shape = "Situación"
+  ) +
+  theme_minimal()
+```

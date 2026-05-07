@@ -1,0 +1,1591 @@
+---
+title: "Analisis descriptivo datos"
+format: html
+code-fold: true
+code-summary: "Mostrar código"
+---
+### Introducción 
+
+```{r cargar_datos, message = FALSE, warning=FALSE}
+library(tidyverse)
+library(DT)
+library(GGally)
+library(ggplot2)
+library(ggforce)
+library(reshape2)
+library(cluster)
+library(factoextra)
+library(fpc)
+library(corrplot)
+library(rnaturalearth)
+library(rnaturalearthdata)
+library(sf)
+library(knitr)
+library(mclust)
+library(stringr)
+library(rvest)
+library(dplyr)
+library(purrr)
+library(httr)
+library(dbscan)
+library(fmsb)
+library(UpSetR)
+
+ruta = "C://TFG//Football-Data//Data//datos_finales.csv"
+datos_jugadores = read.csv(ruta, encoding = "UTF8")
+datos_jugadores = datos_jugadores[, -1]
+datos_num = datos_jugadores %>%
+  select(where(is.numeric)) %>%
+  scale()
+datos_num = datos_num[,-c(1,2)]  # Eliminamos Edad y Año de nacimiento de variables númericas ya que no nos interesan para sustituir a Raillo, de hecho buscamos que sea más joven.
+centrales = datos_jugadores %>% filter(Posicion_Detallada == "DFC"| Posicion_Detallada == "MCD"| Posicion_Detallada == "LI"| Posicion_Detallada == "LD") # Añadimos los pivotes porque puede haber jugadores similares a centrales estadisticamente que se les considere pivote.
+centrales_num = centrales %>% select(where(is.numeric)) %>% scale() 
+jugador = "Antonio Raillo" # Jugador objetivo para sustituir
+```
+
+El conjunto de datos utilizado contiene las estadísticas individuales de todos los jugadores de campo que han participado en las cinco grandes ligas europeas de fútbol (Premier League, LaLiga, Serie A, Bundesliga y Ligue 1). Las observaciones fueron obtenidas a partir de la plataforma FBref y recogen información detallada de rendimiento por partido y por temporada. Además hemos cogido las posiciones detalladas de Besoccer.
+
+Veamos una tabla de las primeras 10 filas de los datos
+
+```{r, tabla} 
+DT::datatable(head(datos_jugadores,10),
+  options = list(scrollX = TRUE, dom = 't')
+)
+
+jugadores = nrow(datos_jugadores)
+variables = ncol(datos_jugadores)
+
+num_vars = datos_jugadores %>%
+  select(where(is.numeric)) %>%
+  ncol()
+```
+
+
+Como podemos ver, tenemos `r jugadores` jugadores y `r variables` variables en las que hay `r num_vars` númericas y `r variables - num_vars` cualitativas.
+
+### Cualitativas 
+
+Hagamos un mapa para ver de que paises europeos hay más jugadores en nuestra base de datos, para ello debemos crear una nueva variable usando "Pais":
+```{r paises}
+jugadores_pais = as.data.frame(
+  table(sub(".* ", "", datos_jugadores$Pais))
+)
+names(jugadores_pais) = c("country_code", "n_jugadores")
+```
+
+Ahora que tenemos la tabla con el número de jugadores, cargaremos el mapa usando la libreria "rnaturalearth", esta libreria considera Reino Unido como un país, y no lo divide en 4 (Inglaterra, Irlanda del Norte, Escocia y Gales), por tanto vamos a cambiar su código, además, debemos modificar la codificación de algunos paises para que la libreria los detecte correctamente.
+
+```{r cambios_paises}
+jugadores_pais = jugadores_pais %>%
+  mutate(iso_a3 = case_when(
+      country_code %in% c("ENG", "SCO", "WAL", "NIR") ~ "GBR",
+       country_code == "GER" ~ "DEU",
+      country_code == "NED" ~ "NLD",
+      country_code == "POR" ~ "PRT",
+      country_code == "SUI" ~ "CHE",
+      country_code == "CRO" ~ "HRV",
+      country_code == "DEN" ~ "DNK",
+      country_code == "GRE" ~ "GRC",
+      TRUE ~ country_code 
+    )
+  )
+```
+
+Creamos intervalos para identificar mejor los colores
+
+```{r intervalos_pais}
+
+jugadores_pais=jugadores_pais %>%
+  group_by(iso_a3) %>%
+  summarise(
+    n_jugadores = sum(n_jugadores),
+    intervalo_jugadores = cut(
+      n_jugadores,
+      breaks = c(0, 10, 25, 50, 100, 200, Inf),
+      labels = c("1–9", "10–24", "25–49", "50–99", "100–199", "200+"),
+      right = FALSE
+    ),
+    .groups = "drop"
+  )
+```
+
+Y vamos a ver como queda el mapa
+
+```{r mapa}
+europa = rnaturalearth::ne_countries(scale = "medium", returnclass = "sf") %>%
+  filter(region_un == "Europe")
+
+
+mapa_europa = europa %>%
+  dplyr::left_join(jugadores_pais, by = c("iso_a3_eh" = "iso_a3"))
+
+ggplot2::ggplot(mapa_europa) +
+  ggplot2::geom_sf(aes(fill = intervalo_jugadores), color = "white", size = 0.2) +
+  ggplot2::scale_fill_brewer(palette = "Blues", na.value = "grey90",
+                    name = "Jugadores") +
+  ggplot2::coord_sf(xlim = c(-15, 40), ylim = c(35, 72), expand = FALSE) +
+  ggplot2::theme_minimal() +
+  ggplot2::theme(
+    panel.grid = element_blank(),
+    axis.title = element_blank(),
+    axis.text = element_blank()
+  )
+```
+
+Como se puede ver en el mapa, la mayoria de jugadores provienen de los paises de las ligas.
+Veamos como tenemos repartidas las posiciones según Fbref en nuestra base de datos:
+
+```{r campo_pos_fbref}
+posiciones_fbref = stringr::str_extract(datos_jugadores$Posiciones,"^[A-Z]+")
+numero_posicion_fbref = as.data.frame(table(posiciones_fbref))
+coords_pos_fbref = data.frame(
+  posiciones_fbref = c("GK","DF","MF","FW"),
+  x = c(10, 35, 60, 85),
+  y = c(34, 34, 34, 34)
+)
+datos_pos_fbref = numero_posicion_fbref %>% left_join(coords_pos_fbref, by = "posiciones_fbref")
+
+ggplot2::ggplot() +
+  # Campo
+  ggplot2::geom_rect(aes(xmin=0, xmax=105, ymin=0, ymax=68),
+            fill="forestgreen", color="white", linewidth=1.2) +
+  
+  # Línea central
+  ggplot2::geom_segment(aes(x=52.5, y=0, xend=52.5, yend=68), color="white", linewidth=1) +
+  
+  # Círculo central
+  ggforce::geom_circle(aes(x0=52.5, y0=34, r=9.15), color="white", linewidth=1) +
+  
+  # Punto central
+  ggplot2::geom_point(aes(x=52.5, y=34), color="white", size=2) +
+  
+  # Área grande izquierda
+  ggplot2::geom_rect(aes(xmin=0, xmax=16.5, ymin=13.84, ymax=54.16),
+            fill=NA, color="white", linewidth=1) +
+  # Área pequeña izquierda
+  ggplot2::geom_rect(aes(xmin=0, xmax=5.5, ymin=24.84, ymax=43.16),
+            fill=NA, color="white", linewidth=1) +
+  # Punto penalti izquierdo
+  ggplot2::geom_point(aes(x=11, y=34), color="white", size=2) +
+  
+  # Área grande derecha
+  ggplot2::geom_rect(aes(xmin=105-16.5, xmax=105, ymin=13.84, ymax=54.16),
+            fill=NA, color="white", linewidth=1) +
+  # Área pequeña derecha
+  ggplot2::geom_rect(aes(xmin=105-5.5, xmax=105, ymin=24.84, ymax=43.16),
+            fill=NA, color="white", linewidth=1) +
+  # Punto penalti derecho
+  ggplot2::geom_point(aes(x=105-11, y=34), color="white", size=2) +
+  
+  # Esquinas
+  ggforce::geom_arc(aes(x0=0, y0=0, r=1, start=0, end=pi/2), color="white") +
+  ggforce::geom_arc(aes(x0=0, y0=68, r=1, start=-pi/2, end=0), color="white") +
+  ggforce::geom_arc(aes(x0=105, y0=0, r=1, start=pi/2, end=pi), color="white") +
+  ggforce::geom_arc(aes(x0=105, y0=68, r=1, start=pi, end=3*pi/2), color="white") +
+  
+  # Tus posiciones
+  ggplot2::geom_point(data = datos_pos_fbref,
+             aes(x = x, y = y, size = Freq),
+             color = "blue", alpha = 0.85) +
+  
+  ggplot2::geom_text(data = datos_pos_fbref,
+            aes(x = x, y = y, label = posiciones_fbref),
+            fontface = "bold", color = "black", vjust = -1) +
+  
+  ggplot2::scale_size(range = c(10, 40)) +
+  ggplot2::guides(size = "none") +
+  ggplot2::coord_fixed() +
+  ggplot2::theme_void()
+```
+
+Ahora veamoslo con las posiciones detalladas.
+
+```{r campo_pos_besoccer}
+posiciones_besoccer = datos_jugadores$Posicion_Detallada
+numero_posicion_besoccer = as.data.frame(table(posiciones_besoccer))
+coords_pos_besoccer = data.frame(
+  posiciones_besoccer = c(
+    "PT","LD","DFC","LI","CAD","CAI",
+    "MCD","MC","MD","MI","MP","ED","EI","DC"
+  ),
+  x = c(  8, 20, 25, 20, 32, 32, 40, 55, 55, 55, 72, 80, 80, 92 ),
+  y = c( 34, 12, 34, 56, 12, 56, 34, 34, 12, 56, 34, 12, 56, 34 )
+)
+datos_pos_besoccer = numero_posicion_besoccer %>%
+  left_join(coords_pos_besoccer, by = "posiciones_besoccer")
+datos_plot_besoccer = datos_pos_besoccer %>%
+  mutate(grupo = case_when(
+    posiciones_besoccer == "PT" ~ "Portero",
+    posiciones_besoccer %in% c("LD","LI","DFC","CAD","CAI") ~ "Defensa",
+    posiciones_besoccer %in% c("MCD","MC","MD","MI","MP") ~ "Medio",
+    posiciones_besoccer %in% c("ED","EI","DC") ~ "Delantero",
+    TRUE ~ "Otros"
+  ))
+colores_azules = c(
+  "Portero" = "#08306B",
+  "Defensa" = "#2171B5",
+  "Medio"   = "#6BAED6",
+  "Delantero" = "#C6DBEF"
+)
+ggplot() +
+  # Campo
+  ggplot2::geom_rect(aes(xmin=0, xmax=105, ymin=0, ymax=68),
+            fill="forestgreen", color="white", linewidth=1.2) +
+  
+  # Línea central
+  ggplot2::geom_segment(aes(x=52.5, y=0, xend=52.5, yend=68), color="white", linewidth=1) +
+  
+  # Círculo central
+  ggforce::geom_circle(aes(x0=52.5, y0=34, r=9.15), color="white", linewidth=1) +
+  
+  # Punto central
+  ggplot2::geom_point(aes(x=52.5, y=34), color="white", size=2) +
+  
+  # Área grande izquierda
+  ggplot2::geom_rect(aes(xmin=0, xmax=16.5, ymin=13.84, ymax=54.16),
+            fill=NA, color="white", linewidth=1) +
+  # Área pequeña izquierda
+  ggplot2::geom_rect(aes(xmin=0, xmax=5.5, ymin=24.84, ymax=43.16),
+            fill=NA, color="white", linewidth=1) +
+  # Punto penalti izquierdo
+  ggplot2::geom_point(aes(x=11, y=34), color="white", size=2) +
+  
+  # Área grande derecha
+  ggplot2::geom_rect(aes(xmin=105-16.5, xmax=105, ymin=13.84, ymax=54.16),
+            fill=NA, color="white", linewidth=1) +
+  # Área pequeña derecha
+  ggplot2::geom_rect(aes(xmin=105-5.5, xmax=105, ymin=24.84, ymax=43.16),
+            fill=NA, color="white", linewidth=1) +
+  # Punto penalti derecho
+  ggplot2::geom_point(aes(x=105-11, y=34), color="white", size=2) +
+  
+  # Esquinas
+  ggforce::geom_arc(aes(x0=0, y0=0, r=1, start=0, end=pi/2), color="white") +
+  ggforce::geom_arc(aes(x0=0, y0=68, r=1, start=-pi/2, end=0), color="white") +
+  ggforce::geom_arc(aes(x0=105, y0=0, r=1, start=pi/2, end=pi), color="white") +
+  ggforce::geom_arc(aes(x0=105, y0=68, r=1, start=pi, end=3*pi/2), color="white") +
+  
+  # Tus posiciones coloreadas
+  ggplot2::geom_point(data = datos_plot_besoccer,
+             aes(x = x, y = y, size = Freq, color = grupo),
+             alpha = 0.9) +
+
+  # Etiquetas
+  ggplot2::geom_text(data = datos_plot_besoccer,
+            aes(x = x, y = y, label = posiciones_besoccer),
+            fontface = "bold", color = "black", vjust = -1) +
+
+  # Colores por grupo
+  ggplot2::scale_color_manual(values = colores_azules) +
+
+  # Tamaño
+  ggplot2::scale_size(range = c(10, 40)) +
+  ggplot2::guides(size = "none", color = "none") +
+  ggplot2::coord_fixed() +
+  ggplot2::theme_void() 
+
+```
+
+
+### Cuantitativas 
+
+Veamos en que variables destaca (para bien y para mal) `r jugador``, nuestro jugador objetivo, y vamos a describirlas.
+
+```{r percentiles}
+percentiles = datos_jugadores %>% mutate(across(where(is.numeric), ~ percent_rank(.x) * 100))
+percentiles_raillo_ordenados = percentiles %>% filter(Jugador == jugador)%>% select(where(is.numeric)) %>% pivot_longer(cols= everything(), names_to = "Variable", values_to = "Percentil") %>% arrange(desc(Percentil))
+mejores = head(percentiles_raillo_ordenados,3)
+peores = tail(percentiles_raillo_ordenados,3)
+rbind(mejores, peores)
+numero_ceros = sum(percentiles_raillo_ordenados$Percentil == 0, na.rm = TRUE)
+```
+
+
+La variable "`r mejores$Variable[1]`" indica los disparos bloqueados por el jugador.
+
+La variable "`r mejores$Variable[2]`" indica los despejes realizados por el jugador, es decir, cuando el jugador saca el balón de la zona de peligro.
+
+La variable "`r mejores$Variable[3]`" indica el número de duelos ganados, SofaScore cuenta como duelo ganado cuando recuperas la posesión o evitar que el rival progrese.
+
+Además de estas 3, hay `r numero_ceros` variables en las que `r jugador` está en el percentil 0, definamos 3 de ellas.
+
+La variable "`r peores$Variable[1]`" indica el número de penaltis recibidos.
+
+La variable "`r peores$Variable[2]`" indica el número de penaltis cometidos.
+
+La variable "`r peores$Variable[3]`" indica los goles en propia anotados por el jugador.
+
+Vamos a calcular algunos estadísticos:
+
+Este es el vector de medias de las variables cuantitativas 
+
+```{r medias, echo=FALSE}
+medias = datos_jugadores %>%
+  select(where(is.numeric)) %>% colMeans()
+datatable(t(medias),
+  options = list(scrollX = TRUE, dom = 't'),
+)
+```
+
+```{r correlacion}
+cor_mat = cor(select(datos_jugadores, where(is.numeric)), use = "complete.obs")
+corrplot(cor_mat,
+         method = "color",
+         type = "full",
+         order = "hclust",  # agrupa por similitud
+         addrect = 4,       # dibuja 4 grupos, puedes cambiarlo
+         tl.pos = "n",
+         col = colorRampPalette(c("blue", "white", "red"))(200))
+```
+
+Este gráfico nos muestra la correlación entre las variables númericas, cuando formamos 4 grupos nos quedan los cuadrados negros. En cada grupo pertenecen las variables que estén más correlacionadas entre si.
+
+### Clustering general 
+
+Vamos a realizar clustering sobre nuestra base de datos, empezaremos mirando los índices de Silueta y de Calinski para saber el número ideal de clusters. Para hacer el clustering hemos usado 2 métodos diferentes, k-means y jerárquico con el método de ward usando la distancia euclidea.
+```{r silueta}
+ks = 4:10
+indices_sil_kmeans = purrr::map_dfr(ks, function(k){
+  set.seed(123)
+  km = stats::kmeans(datos_num, centers = k, nstart = 25, iter.max = 100, algorithm = "Hartigan-Wong")
+  sil = cluster::silhouette(km$cluster, dist(datos_num)) # Euclidea
+  tibble(
+    k = k,
+    silueta = mean(sil[, 3])
+  )
+})
+
+k_kmeans_opt_sil = indices_sil_kmeans$k[which.max(indices_sil_kmeans$silueta)]
+
+jerarquico_total = stats::hclust(dist(datos_num), method = "ward.D2")
+
+indices_sil_jer = purrr::map_dfr(ks, function(k) {
+  grupos = stats::cutree(jerarquico_total, k = k)
+  sil = cluster::silhouette(grupos, dist(datos_num))
+  tibble(
+    k = k,
+    silueta = mean(sil[, "sil_width"])
+  )
+})
+
+
+k_ward_opt_sil = indices_sil_jer$k[which.max(indices_sil_jer$silueta)]
+
+
+```
+
+Entonces los valores óptimos para el índice de silueta para k-means y jerárquico (ward) son `r k_kmeans_opt_sil` clústers y `r k_ward_opt_sil` clústers respectivamente.
+
+Veamos los gráficos de los índices de silueta.
+
+```{r clustering_1, warning=FALSE}
+grupos_jerarquico_sil_total = stats::cutree(jerarquico_total, k = k_ward_opt_sil)
+datos_jugadores$cluster_jerarquico_sil = grupos_jerarquico_sil_total
+sil_jerarquico = cluster::silhouette(grupos_jerarquico_sil_total, dist(datos_num))
+kmeans_5 = stats::kmeans(datos_num, centers = k_kmeans_opt_sil, nstart = 25, iter.max = 100, algorithm = "Hartigan-Wong")
+datos_jugadores$cluster_kmeans_sil = kmeans_5$cluster
+sil_kmeans = cluster::silhouette(kmeans_5$cluster, dist(datos_num))  
+plotj = factoextra::fviz_silhouette(sil_jerarquico)
+plotj
+plotk = factoextra::fviz_silhouette(sil_kmeans)
+plotk
+```
+
+```{r rand_sil_total}
+rand_sil_total = mclust::adjustedRandIndex(grupos_jerarquico_sil_total, kmeans_5$cluster)
+rand_sil_total
+```
+
+El índice de Rand de estos clusters usando los dos algoritmos (jerárquico y $k$-means) es `r rand_sil_total`, teniendo en cuenta que el máximo es 1, el valor es medio por lo que podemos decir que los clústers son diferentes.
+
+Veamos a que cluster pertenece `r jugador` para ambos algoritmos con el número de clusters indicados por el índice de Silueta.
+
+```{r cluster_sil_jugador}
+cluster_jugador_sil_jerarquico = datos_jugadores$cluster_jerarquico_sil[datos_jugadores$Jugador == jugador]
+cluster_jugador_sil_5means = datos_jugadores$cluster_kmeans_sil[datos_jugadores$Jugador == jugador]
+```
+
+Ahora hagamoslo con el índice de Calinski 
+
+```{r ch_total}
+indice_ch_kmeans = purrr::map_dfr(ks, function(k){
+  set.seed(123)
+  km = stats::kmeans(datos_num, centers = k, nstart = 25, iter.max = 100, algorithm = "Hartigan-Wong")
+  
+  stats = fpc::cluster.stats(dist(datos_num), km$cluster)
+  
+  tibble(
+    k = k,
+    calinski = stats$ch     # Índice de Calinski-Harabasz
+  )
+})
+
+k_kmeans_opt_ch = indice_ch_kmeans$k[which.max(indice_ch_kmeans$calinski)]
+
+indice_ch_jerarquico=map_dfr(ks, function(k){
+  grupos=stats::cutree(jerarquico_total, k = k)
+  
+  stats=fpc::cluster.stats(dist(datos_num), grupos)
+  
+  tibble(
+    k = k,
+    calinski = stats$ch
+  )
+})
+
+k_jerarquico_opt_ch=indice_ch_jerarquico$k[which.max(indice_ch_jerarquico$calinski)]
+
+
+```
+
+Entonces el número óptimo de clústers según el índice CH son `r k_kmeans_opt_ch ` para k-medias y  `r k_jerarquico_opt_ch` para jerárquico.
+
+```{r}
+
+indice_ch_kmeans <- indice_ch_kmeans %>%
+  mutate(metodo = "K-means")
+
+indice_ch_jerarquico <- indice_ch_jerarquico %>%
+  mutate(metodo = "Jerárquico")
+
+indice_ch_total <- bind_rows(indice_ch_kmeans, indice_ch_jerarquico)
+
+ggplot(indice_ch_total, aes(x = k, y = calinski, color = metodo)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  geom_point(
+    data = indice_ch_total %>%
+      group_by(metodo) %>%
+      slice_max(calinski, n = 1, with_ties = FALSE),
+    size = 4
+  ) +
+  geom_text(
+    data = indice_ch_total %>%
+      group_by(metodo) %>%
+      slice_max(calinski, n = 1, with_ties = FALSE),
+    aes(label = paste0("k = ", k)),
+    vjust = -1
+  ) +
+  labs(
+    x = "Número de clústeres (k)",
+    y = "Índice de Calinski-Harabasz",
+    color = "Método"
+  ) +
+  theme_minimal()
+```
+
+Veamos el índice de Rand para estos clústers:
+
+```{r rand_ch}
+grupos_jerarquico_total_ch = stats::cutree(jerarquico_total, k = k_jerarquico_opt_ch)
+datos_jugadores$cluster_jerarquico_ch = grupos_jerarquico_total_ch
+kmeans_ch = stats::kmeans(datos_num, centers = k_kmeans_opt_ch, nstart = 25, iter.max = 100)
+datos_jugadores$cluster_kmeans_ch = kmeans_ch$cluster
+rand_ch_total = mclust::adjustedRandIndex(grupos_jerarquico_total_ch, kmeans_ch$cluster)
+rand_ch_total
+```
+
+En este caso, el índice de Rand es `r rand_ch_total`, que es mayor que `r rand_sil_total`, por lo que podemos asegurar que estos clústers son más similares que los hechos en el índice de silueta (mismos algoritmos pero diferente número de clusters). 
+
+
+Veamos a que cluster pertenece `r jugador` en ambos algoritmos con el número de clusters índicado por el índice de Calinski
+```{r cluster_ch_jugador}
+cluster_jugador_ch_jerarquico = datos_jugadores$cluster_jerarquico_ch[datos_jugadores$Jugador == jugador]
+cluster_jugador_ch_5means = datos_jugadores$cluster_kmeans_ch[datos_jugadores$Jugador == jugador]
+```
+
+### PCA 
+
+Vamos a realizar ahora el ACP a nuestros datos, usaremos datos_num que ya están escalados
+
+```{r pca}
+pca_total = stats::prcomp(datos_num, center = TRUE, scale. = FALSE)
+eigenvalues = (pca_total$sdev)^2
+var_explained=eigenvalues/sum(eigenvalues)
+eigen_table=tibble(PC = paste0("PC", 1:length(eigenvalues)),
+                      Eigenvalue = round(eigenvalues, 4),
+                      Variance = round(var_explained, 4),
+                      `Cumulative variance` = round(cumsum(var_explained), 4))
+
+DT::datatable(eigen_table, options = list(scrollY = "300px", scrollCollapse = TRUE,paging = FALSE), caption = "Valores propios (autovalues) y varianza explicada")
+```
+Veamos una gráfica con los 10 primeros valores de la tabla y el porcentaje de información que lleva cada variable
+
+```{r grafica}
+factoextra::fviz_screeplot(pca_total, addlabels = TRUE, ylim = c(0, 40))
+```
+
+Como podemos ver en la tabla, para llegar a un 80% de información necesitamos usar 19 variables.
+
+Veamos el circulo de correlación con todas las variables iniciales en función de las 2 primeras después de haber hecho el ACP. Hay que tener en cuenta que con estas dos variables perdemos un 50,26% de la información de nuestra base de datos inicial, pero servirá para hacernos una idea de las variables
+
+```{r circulo, warning=FALSE}
+factoextra::fviz_pca_var(pca_total,
+             col.var = "contrib", # color por contribución
+             gradient.cols = c("blue", "yellow", "red"),
+             repel = TRUE,
+             labelsize = 0)
+```
+
+Ahora que lo hemos visto con todas las variables, vamos a verlo usando solo las 20 que más peso tienen en este ACP (Usando las 2 primeras variables).
+
+```{r circulo_top20}
+# 1. A partir de prcomp
+var_pca=factoextra::get_pca_var(pca_total)
+
+# 2. Contribución total a los dos primeros ejes (PC1 y PC2)
+contrib_tot=rowSums(var_pca$contrib[, 1:2])
+
+# 3. Nombres de las 20 variables con mayor contribución
+top20=names(sort(contrib_tot, decreasing = TRUE))[1:20]
+
+# 4. Gráfico solo con esas 20 variables
+factoextra::fviz_pca_var(
+  pca_total,
+  select.var = list(name = top20),  
+  col.var = "contrib",
+  gradient.cols = c("blue", "yellow", "red"),
+  repel = TRUE,
+  #labelsize = 0
+)
+```
+
+Con esto, podemos hacer una proyección de los clusters que nos han salido usando k-means y donde están estas 20 variables en la proyección
+
+```{r clustering_top20}
+## 4. Biplot PCA + clusters + solo 20 variables top
+factoextra::fviz_pca_biplot(
+  pca_total,
+  geom.ind = "point",
+  habillage = factor(kmeans_5$cluster),   # color por cluster k-means
+  addEllipses = TRUE,                 # elipses por cluster (opcional)
+  select.var = list(name = top20),    # solo variables top
+  #col.var = "contrib",
+  #gradient.cols = c("blue", "yellow", "red"),
+  repel = TRUE,
+  #labelsize = 0
+)
+```
+
+
+Veamos los jugadores cercanos a `r jugador` usando las dos primeras variables del PCA.
+
+```{r grafico_cerca_raillo}
+# 1. Coordenadas del PCA
+coords_pca = as.data.frame(pca_total$x)
+coords_pca$Jugador = datos_jugadores$Jugador
+
+# 2. Localizar a Antonio Raíllo
+raillo = coords_pca %>% filter(Jugador == jugador)
+
+# 3. Distancia euclídea a Raíllo
+coords_pca = coords_pca %>%
+  mutate(dist_raillo = sqrt((PC1 - raillo$PC1)^2 +
+                            (PC2 - raillo$PC2)^2))
+
+# 4. Jugadores más cercanos (20)
+vecinos_pca = coords_pca %>%
+  arrange(dist_raillo) %>%
+  slice(2:20)     # del 2 al 20 para excluir al propio Raillo
+
+# 5. Rango del zoom
+zoom = 1
+x_min = raillo$PC1 - zoom
+x_max = raillo$PC1 + zoom
+y_min = raillo$PC2 - zoom
+y_max = raillo$PC2 + zoom
+
+# 6. Gráfico PCA con zoom + Raíllo en azul + vecinos en rojo
+g = factoextra::fviz_pca_ind(
+  pca_total,
+  geom = "point",
+  repel = TRUE
+) +
+  xlim(x_min, x_max) +
+  ylim(y_min, y_max) +
+  geom_point(data = raillo, aes(PC1, PC2), color = "blue", size = 4) +
+  geom_point(data = vecinos_pca, aes(PC1, PC2), color = "red", size = 3) +
+  geom_text(data = raillo,
+            aes(PC1, PC2, label = Jugador),
+            color = "black", size = 4, vjust = -0.8) +
+  geom_text(data = vecinos_pca,
+            aes(PC1, PC2, label = Jugador),
+            color = "black", size = 3, vjust = -0.8)
+g
+```
+
+```{r grafico_estrella}
+# Añadir gráfico de estrella
+kn = 10
+vecinos2 = coords_pca %>%
+  arrange(dist_raillo) %>%
+  slice(1:kn)
+pca_copia = as.data.frame(pca_total$x)
+pca_copia$Jugador = datos_jugadores$Jugador
+vars <- pca_copia %>%
+  filter(Jugador %in% vecinos2$Jugador)
+vars_num = vars %>% select(where(is.numeric))
+vars_num$Jugador = vars$Jugador
+max_row <- apply(vars_num[1:kn,1:10], 2, max)
+min_row <- apply(vars_num[1:kn,1:10], 2, min)
+paleta_grises_20 <- c(
+  "#1A1A1A","#2A2A2A","#3A3A3A","#4A4A4A","#5A5A5A",
+  "#7A7A7A","red","#8A8A8A","#9A9A9A","#AAAAAA",
+  "#BABABA","#CACACA","#DADADA","#E0E0E0","#E6E6E6",
+  "#ECECEC","#F2F2F2","#F7F7F7","#FAFAFA","#FFFFFF"
+)
+
+
+df_radar <- rbind(max_row, min_row, vars_num[1:kn,1:10])
+rownames(df_radar) = c("max", "min", vars_num$Jugador[1:kn])
+jugadores = rownames(df_radar)
+radarchart(df_radar, 
+           axistype = 1,
+           pcol = paleta_grises_20,
+           pfcol = NA,
+           plwd = 2,
+           cglcol = "grey",
+           cglty = 1,
+           axislabcol = "black",
+           vlcex = 0.8,
+           caxislabels = rep("", 5))
+radarchart(
+  df_radar,
+  axistype = 1,
+  pcol = paleta_grises_20,
+  pfcol = NA,
+  plwd = 2,
+  cglcol = "grey",
+  cglty = 1,
+  axislabcol = "black",
+  vlcex = 0.8,
+  caxislabels = rep("", 4)
+)
+
+#legend("topright", legend = jugadores[-c(1,2)], col = paleta_grises_20, lwd = 2, ncol = 1, cex = 0.8, bty = "n")
+
+```
+
+
+
+
+### Clustering con las nuevas variables 
+
+Habiendo hecho el PCA, podemos volver a hacer el clustering pero con las nuevas variables, en nuestro caso si cogemos 19 variables mantenemos un 80% de la información, creamos nuestro nuevo data frame:
+```{r datos_pca}
+datos_jugadores_pca = as.data.frame(pca_total$x[,1:20])
+datos_jugadores_pca$Jugador = datos_jugadores$Jugador
+datos_jugadores_pca_num = datos_jugadores_pca %>%
+  select(where(is.numeric)) %>%
+  scale()
+```
+
+Y vamos a hacer otra vez k-medias y jerárquico, para ello tenemos que volver a ver mediante el índice de silueta y el de Calinski el número ideal de clusters:
+
+```{r silueta_pca, warning = FALSE}
+
+indices_sil_kmeans_pca = purrr::map_dfr(ks, function(k){
+  set.seed(123)
+  km_pca = stats::kmeans(datos_jugadores_pca_num, centers = k, nstart = 25, iter.max = 100)
+  sil = cluster::silhouette(km_pca$cluster, dist(datos_jugadores_pca_num)) # Euclidea
+  tibble(
+    k = k,
+    silueta = mean(sil[, 3])
+  )
+})
+
+k_kmeans_sil_opt_pca = indices_sil_kmeans_pca$k[which.max(indices_sil_kmeans_pca$silueta)]
+
+
+jerarquico_pca_total = stats::hclust(dist(datos_jugadores_pca_num), method = "ward.D2")
+
+indices_sil_jerarquico_pca = purrr::map_dfr(ks, function(k) {
+  grupos = stats::cutree(jerarquico_pca_total, k = k)
+  sil = cluster::silhouette(grupos, dist(datos_jugadores_pca_num))
+  tibble(
+    k = k,
+    silueta = mean(sil[, "sil_width"])
+  )
+})
+
+k_sil_jerarquico_opt_pca = indices_sil_jerarquico_pca$k[which.max(indices_sil_jerarquico_pca$silueta)]
+```
+
+Entonces los valores óptimos para el índice de silueta para k-means y jerárquico (ward) son `r k_kmeans_sil_opt_pca` clústers y `r k_sil_jerarquico_opt_pca` clústers respectivamente, entonces a partir de ahora trabajaremos con $k=$`r k_kmeans_sil_opt_pca` para k-means y $k=$`r k_sil_jerarquico_opt_pca` para jerárquico.
+
+```{r clustering_pca_sil}
+grupos_jerarquico_sil_pca = stats::cutree(jerarquico_pca_total, k = k_sil_jerarquico_opt_pca)
+sil_jerarquico_pca_total = cluster::silhouette(grupos_jerarquico_sil_pca, dist(datos_num))
+plotj = factoextra::fviz_silhouette(sil_jerarquico_pca_total)
+plotj
+datos_jugadores$cluster_jerarquico_sil_pca = grupos_jerarquico_sil_pca
+cluster_jugador_sil_jerarquico_pca = datos_jugadores$cluster_jerarquico_sil_pca[datos_jugadores$Jugador == jugador]
+kmeans_pca = stats::kmeans(datos_jugadores_pca_num, centers = k_kmeans_sil_opt_pca, nstart = 25, iter.max = 100)
+sil_kmeans_pca = cluster::silhouette(kmeans_pca$cluster, dist(datos_num))
+plotj = factoextra::fviz_silhouette(sil_kmeans_pca)
+plotj
+datos_jugadores$cluster_kmeans_sil_pca = kmeans_pca$cluster
+cluster_jugador_sil_kmeans_pca = datos_jugadores$cluster_kmeans_sil_pca[datos_jugadores$Jugador == jugador]
+rand_sil_pca_total = mclust::adjustedRandIndex(grupos_jerarquico_sil_pca, kmeans_pca$cluster)
+rand_sil_pca_total
+```
+
+El índice de Rand para estos clústers es `r rand_sil_pca_total`, que es muy bajo por tanto los clústers son muy diferentes.
+
+Ahora lo haremos con el índice de Calinski
+
+```{r ch_pca}
+indices_kmeans_ch_pca = purrr::map_dfr(ks, function(k){
+  set.seed(123)
+  km_pca = stats::kmeans(datos_jugadores_pca_num, centers = k, nstart = 25, iter.max = 100)
+  
+  stats = fpc::cluster.stats(dist(datos_jugadores_pca_num), km_pca$cluster)
+  
+  tibble(
+    k = k,
+    calinski = stats$ch     # Índice de Calinski-Harabasz
+  )
+})
+
+k_opt_kmeans_ch_pca = indices_kmeans_ch_pca$k[which.max(indices_kmeans_ch_pca$calinski)]
+
+indices_jerarquico_ch_pca = purrr::map_dfr(ks, function(k){
+  grupos=stats::cutree(jerarquico_pca_total, k = k)
+  
+  stats=fpc::cluster.stats(dist(datos_jugadores_pca_num), grupos)
+  
+  tibble(
+    k = k,
+    calinski = stats$ch
+  )
+})
+
+k_opt_jerarquico_ch_pca=indices_jerarquico_ch_pca$k[which.max(indices_jerarquico_ch_pca$calinski)]
+
+```
+
+Entonces el número óptimo de clústers según el índice CH son `r k_opt_kmeans_ch_pca` para k-medias y  `r k_opt_jerarquico_ch_pca` para jerárquico.
+
+```{r}
+indices_kmeans_ch_pca <- indices_kmeans_ch_pca %>%
+  mutate(metodo = "K-means PCA")
+
+indices_jerarquico_ch_pca <- indices_jerarquico_ch_pca %>%
+  mutate(metodo = "Jerárquico PCA")
+
+indices_ch_pca_total <- bind_rows(
+  indices_kmeans_ch_pca,
+  indices_jerarquico_ch_pca
+)
+
+ggplot(indices_ch_pca_total, aes(x = k, y = calinski, color = metodo)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  geom_point(
+    data = indices_ch_pca_total %>%
+      group_by(metodo) %>%
+      slice_max(calinski, n = 1, with_ties = FALSE),
+    size = 4
+  ) +
+  geom_text(
+    data = indices_ch_pca_total %>%
+      group_by(metodo) %>%
+      slice_max(calinski, n = 1, with_ties = FALSE),
+    aes(label = paste0("k = ", k)),
+    vjust = -1
+  ) +
+  labs(
+    x = "Número de clústeres (k)",
+    y = "Índice Calinski-Harabasz",
+    color = "Método"
+  ) +
+  theme_minimal()
+```
+
+```{r clustering_pca_ch}
+grupos_jerarquico_ch_pca = stats::cutree(jerarquico_pca_total, k = k_opt_jerarquico_ch_pca)
+datos_jugadores$cluster_jerarquico_ch_pca = grupos_jerarquico_ch_pca
+cluster_jugador_ch_jerarquico_pca = grupos_jerarquico_ch_pca[datos_jugadores$Jugador == jugador]
+kmeans_ch_pca = stats::kmeans(datos_jugadores_pca_num, centers = k_opt_kmeans_ch_pca, nstart = 25, iter.max = 100)
+datos_jugadores$cluster_kmeans_ch_pca = kmeans_ch_pca$cluster
+cluster_jugador_ch_kmeans_pca = kmeans_ch_pca$cluster[datos_jugadores$Jugador == jugador]
+```
+
+
+
+### Clustering con defensas 
+
+Ahora, como nuestro objetivo es encontrar un sustituto de `r jugador`, vamos a centrarnos en los centrales y pivotes, primero con todas las variables, después con un nuevo ACP.
+
+Vamos a hacer el clustering de nuevo, pero esta vez solo con defensas. De nuevo, veamos primero el índice de silueta para k-means y para jerárquico (Ward)
+
+```{r silueta_def}
+indices_sil_kmeans_centrales = purrr::map_dfr(ks, function(k){
+  set.seed(123)
+  km = stats::kmeans(centrales_num, centers = k, nstart = 25, iter.max = 100)
+  sil = cluster::silhouette(km$cluster, dist(centrales_num)) # Euclidea
+  tibble(
+    k = k,
+    silueta = mean(sil[, 3])
+  )
+})
+
+k_kmeans_sil_opt_centrales =indices_sil_kmeans_centrales$k[which.max(indices_sil_kmeans_centrales$silueta)]
+
+
+jerarquico_centrales = stats::hclust(dist(centrales_num), method = "ward.D2")
+
+indices_jerarquico_sil_centrales = purrr::map_dfr(ks, function(k) {
+  grupos = stats::cutree(jerarquico_centrales, k = k)
+  sil = cluster::silhouette(grupos, dist(centrales_num))
+  tibble(
+    k = k,
+    silueta = mean(sil[, "sil_width"])
+  )
+})
+
+k_jerarquico_sil_opt_def = indices_jerarquico_sil_centrales$k[which.max(indices_jerarquico_sil_centrales$silueta)]
+```
+
+Entonces los valores óptimos para el índice de silueta para k-means y jerárquico (ward) son `r k_kmeans_sil_opt_centrales` clústers y `r k_jerarquico_sil_opt_def` clústers respectivamente.
+Veamos los gráficos de los índices de silueta.
+
+```{r clustering_def, warning=FALSE}
+grupos_jerarquico_sil_def = stats::cutree(jerarquico_centrales, k = k_jerarquico_sil_opt_def)
+centrales$cluster_jerarquico_sil_centrales = grupos_jerarquico_sil_def
+cluster_jugador_sil_jerarquico_centrales = grupos_jerarquico_sil_def[centrales$Jugador == jugador]
+indice_sil_jer_centrales = cluster::silhouette(grupos_jerarquico_sil_def, dist(centrales_num))
+kmeans_sil_centrales = stats::kmeans(centrales_num, centers = k_kmeans_sil_opt_centrales, nstart = 25, iter.max = 100)
+centrales$cluster_kmeans_sil_centrales = kmeans_sil_centrales$cluster
+cluster_jugador_kmeans_sil_centrales = kmeans_sil_centrales$cluster[centrales$Jugador == jugador]
+indice_sil_kmeans_centrales = cluster::silhouette(kmeans_sil_centrales$cluster, dist(centrales_num))  
+plotj = factoextra::fviz_silhouette(indice_sil_jer_centrales)
+plotj
+plotk = factoextra::fviz_silhouette(indice_sil_kmeans_centrales)
+plotk
+```
+
+Vamos a ver el índice de Rand
+
+```{r rand_def}
+rand_sil_centrales = mclust::adjustedRandIndex(grupos_jerarquico_sil_def, kmeans_sil_centrales$cluster)
+```
+El índice de Rand de estos clusters usando los dos algoritmos (jerárquico y k-means) es `r rand_sil_centrales`, teniendo en cuenta que el máximo es 1, el valor es alto por lo que podemos decir que los clústers son similares.
+
+Veamos usando el índice CH
+```{r ch_def}
+indices_kmeans_ch_centrales = purrr::map_dfr(ks, function(k){
+  set.seed(123)
+  km_def = stats::kmeans(centrales_num, centers = k, nstart = 25, iter.max = 100)
+  
+  stats = fpc::cluster.stats(dist(centrales_num), km_def$cluster)
+  
+  tibble(
+    k = k,
+    calinski = stats$ch     # Índice de Calinski-Harabasz
+  )
+})
+
+k_opt_kmeans_ch_centrales = indices_kmeans_ch_centrales$k[which.max(indices_kmeans_ch_centrales$calinski)]
+
+indice_jerarquico_ch_centrales=purrr::map_dfr(ks, function(k){
+  grupos=stats::cutree(jerarquico_centrales, k = k)
+  
+  stats=fpc::cluster.stats(dist(centrales_num), grupos)
+  
+  tibble(
+    k = k,
+    calinski = stats$ch
+  )
+})
+
+k_opt_jerarquico_ch_centrales=indice_jerarquico_ch_centrales$k[which.max(indice_jerarquico_ch_centrales$calinski)]
+```
+
+Entonces el número óptimo de clústers según el índice CH son `r k_opt_kmeans_ch_centrales` para k-means `r k_opt_jerarquico_ch_centrales` para jerárquico.
+```{r}
+indices_kmeans_ch_centrales <- indices_kmeans_ch_centrales %>%
+  mutate(metodo = "K-means")
+
+indice_jerarquico_ch_centrales <- indice_jerarquico_ch_centrales %>%
+  mutate(metodo = "Jerárquico")
+
+indices_ch_centrales_total <- bind_rows(
+  indices_kmeans_ch_centrales,
+  indice_jerarquico_ch_centrales
+)
+
+ggplot(indices_ch_centrales_total, aes(x = k, y = calinski, color = metodo)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  geom_point(
+    data = indices_ch_centrales_total %>%
+      group_by(metodo) %>%
+      slice_max(calinski, n = 1, with_ties = FALSE),
+    size = 4
+  ) +
+  geom_text(
+    data = indices_ch_centrales_total %>%
+      group_by(metodo) %>%
+      slice_max(calinski, n = 1, with_ties = FALSE),
+    aes(label = paste0("k = ", k)),
+    vjust = -1
+  ) +
+  labs(
+    x = "Número de clústeres (k)",
+    y = "Índice Calinski-Harabasz",
+    color = "Método"
+  ) +
+  theme_minimal()
+```
+
+
+Veamos el índice de Rand:
+```{r clustering_def_ch}
+grupos_jerarquico_ch_centrales = stats::cutree(jerarquico_centrales, k = k_opt_jerarquico_ch_centrales)
+centrales$cluster_jerarquico_ch_centrales = grupos_jerarquico_ch_centrales
+cluster_jugador_ch_jerarquico_centrales = grupos_jerarquico_ch_centrales[centrales$Jugador == jugador]
+kmeans_ch_centrales = stats::kmeans(centrales_num, centers = k_opt_kmeans_ch_centrales, nstart = 25, iter.max = 100)
+centrales$cluster_kmeans_ch_centrales = kmeans_ch_centrales$cluster
+cluster_jugador_ch_kmeans_centrales = kmeans_ch_centrales$cluster[centrales$Jugador == jugador]
+rand_ch_def = adjustedRandIndex(grupos_jerarquico_ch_centrales, kmeans_ch_centrales$cluster)
+```
+
+En este caso, el índice de Rand es `r rand_ch_def`.
+
+### PCA con defensas 
+```{r pca_def}
+pca_centrales = stats::prcomp(centrales_num, center = TRUE, scale. = FALSE)
+eigenvalues_def = (pca_centrales$sdev)^2
+var_explained_def <- eigenvalues_def / sum(eigenvalues_def)
+eigen_table_def <- tibble(PC = paste0("PC", 1:length(eigenvalues_def)),
+                      Eigenvalue = round(eigenvalues_def, 4),
+                      Variance = round(var_explained_def, 4),
+                      `Cumulative variance` = round(cumsum(var_explained_def), 4))
+
+DT::datatable(eigen_table_def, options = list(scrollY = "300px", scrollCollapse = TRUE, paging = FALSE), caption = "Valores propios (autovalues) y varianza explicada")
+```
+
+Veamoslo con un gráfico
+
+```{r graf_def}
+factoextra::fviz_screeplot(pca_centrales, addlabels = TRUE, ylim = c(0, 40))
+```
+
+Para llegar a un 80% de información volvemos a necesitar usar 21 variables del ACP.
+Veamos el circulo de correlación de las variables inciales en funcion de las 2 de más peso del ACP, de nuevo, hay que tener en cuenta que perdemos una gran cantidad de información (de hecho perdemos más información que nuestra base de datos completa). 
+
+```{r circulo_def}
+factoextra::fviz_pca_var(pca_centrales,
+             col.var = "contrib", # color por contribución
+             gradient.cols = c("blue", "yellow", "red"),
+             repel = TRUE,
+             labelsize = 0)
+```
+
+Y con las 20 que más peso tienen, que veremos que son distintas a las vistas antes, esto se debe a que las estadisticas en la posición son más importantes (por ejemplo: un central deberia tener más despejes que disparos a puerta)
+
+```{r top20_def}
+# 1. A partir de prcomp
+var_pca_def = factoextra::get_pca_var(pca_centrales)
+
+# 2. Contribución total a los dos primeros ejes (PC1 y PC2)
+contrib_tot_def = rowSums(var_pca_def$contrib[, 1:2])
+
+# 3. Nombres de las 20 variables con mayor contribución
+top20_def = names(sort(contrib_tot_def, decreasing = TRUE))[1:20]
+
+# 4. Gráfico solo con esas 20 variables
+factoextra::fviz_pca_var(
+  pca_centrales,
+  select.var = list(name = top20_def),   # ← importante: list(name = ...)
+  col.var = "contrib",
+  gradient.cols = c("blue", "yellow", "red"),
+  repel = TRUE,
+  #labelsize = 0
+)
+```
+
+Veamos una proyeccón de los clusters
+
+```{r proyeccion_clusters}
+factoextra::fviz_pca_biplot(
+  pca_centrales,
+  geom.ind = "point",
+  habillage = factor(kmeans_sil_centrales$cluster),   # color por cluster k-means
+  addEllipses = TRUE,                 # elipses por cluster (opcional)
+  select.var = list(name = top20_def),    # solo variables top
+  #col.var = "contrib",
+  #gradient.cols = c("blue", "yellow", "red"),
+  repel = TRUE,
+  #labelsize = 0
+)
+```
+Acerquemoslo a `r jugador`
+```{r cerca_raillo_pca_defensas}
+coords_def = as.data.frame(pca_centrales$x)
+coords_def$Jugador = centrales$Jugador
+
+# 2. Localizar a Antonio Raíllo
+raillo_def = coords_def %>% filter(Jugador == jugador)
+
+# 3. Distancia euclídea a Raíllo
+coords_def = coords_def %>%
+  mutate(dist_raillo = sqrt((PC1 - raillo_def$PC1)^2 +
+                            (PC2 - raillo_def$PC2)^2))
+
+# 4. Jugadores más cercanos (20)
+vecinos_def = coords_def %>%
+  arrange(dist_raillo) %>%
+  slice(2:21)     # del 2 al 21 para excluir a Raíllo (distancia 0)
+
+# 5. Rango del zoom
+zoom = 1
+x_min = raillo_def$PC1 - zoom
+x_max = raillo_def$PC1 + zoom
+y_min = raillo_def$PC2 - zoom
+y_max = raillo_def$PC2 + zoom
+
+# 6. Gráfico PCA con zoom + Raíllo en azul + vecinos en rojo
+g_def = factoextra::fviz_pca_ind(
+  pca_centrales,
+  geom = "point",
+  repel = TRUE
+) +
+  xlim(x_min, x_max) +
+  ylim(y_min, y_max) +
+  geom_point(data = raillo_def, aes(PC1, PC2), color = "blue", size = 4) +
+  geom_point(data = vecinos_def, aes(PC1, PC2), color = "red", size = 3) +
+  geom_text(data = raillo_def,
+            aes(PC1, PC2, label = Jugador),
+            color = "black", size = 4, vjust = -0.8) +
+  geom_text(data = vecinos_def,
+            aes(PC1, PC2, label = Jugador),
+            color = "black", size = 3, vjust = -0.8)
+g_def
+```
+
+### Clustering con las nuevas variables de los defensas
+Igual que con las variables del PCA de todos los jugadores, vamos a hacer el clustering con las variables del PCA de los defensas, para llegar al 80% de información necesitamos coger 19 variables.
+
+```{r datos_pca_centrales}
+datos_pca_centrales = as.data.frame(pca_centrales$x[,1:22])
+datos_pca_centrales$Jugador = centrales$Jugador
+datos_pca_centrales_num = datos_pca_centrales %>%
+  select(where(is.numeric)) %>%
+  scale()
+```
+
+Veamos el índice de silueta de los dos algoritmos que hemos usado
+
+```{r indice_silueta_pca_defensas}
+indices_sil_kmeans_pca_centrales = purrr::map_dfr(ks, function(k){
+  set.seed(123)
+  km_pca_centrales = stats::kmeans(datos_pca_centrales_num, centers = k, nstart = 25, iter.max = 100)
+  sil = cluster::silhouette(km_pca_centrales$cluster, dist(datos_pca_centrales_num)) # Euclidea
+  tibble(
+    k = k,
+    silueta = mean(sil[, 3])
+  )
+})
+
+k_kmeans_sil_opt_pca_centrales = indices_sil_kmeans_pca_centrales$k[which.max(indices_sil_kmeans_pca_centrales$silueta)]
+
+
+jerarquico_pca_centrales = stats::hclust(dist(datos_pca_centrales_num), method = "ward.D2")
+
+indices_sil_jerarquico_pca_centrales = purrr::map_dfr(ks, function(k) {
+  grupos = stats::cutree(jerarquico_pca_centrales, k = k)
+  sil = cluster::silhouette(grupos, dist(datos_pca_centrales_num))
+  tibble(
+    k = k,
+    silueta = mean(sil[, "sil_width"])
+  )
+})
+
+k_sil_jerarquico_opt_pca_centrales = indices_sil_jerarquico_pca$k[which.max(indices_sil_jerarquico_pca_centrales$silueta)]
+```
+
+Entonces en este caso el número ideal de clústers según el índice de Silueta es `r k_kmeans_sil_opt_pca_centrales` y `r k_sil_jerarquico_opt_pca_centrales` para k-means y jerarquico respectivamente.
+
+```{r clustering_sil_pca_def}
+grupos_jerarquico_sil_pca_centrales = stats::cutree(jerarquico_pca_centrales, k = k_sil_jerarquico_opt_pca_centrales)
+centrales$cluster_jerarquico_sil_pca_centrales = grupos_jerarquico_sil_pca_centrales
+cluster_jugador_sil_jerarquico_pca_centrales = centrales$cluster_jerarquico_sil_pca_centrales[centrales$Jugador == jugador]
+kmeans_pca_centrales = stats::kmeans(datos_pca_centrales_num, centers = k_kmeans_sil_opt_pca_centrales, nstart = 25, iter.max = 100)
+centrales$cluster_kmeans_sil_pca_centrales = kmeans_pca_centrales$cluster
+cluster_jugador_sil_kmeans_pca_centrales = centrales$cluster_kmeans_sil_pca_centrales[centrales$Jugador == jugador]
+rand_sil_pca_centrales = mclust::adjustedRandIndex(grupos_jerarquico_sil_pca_centrales, kmeans_pca_centrales$cluster)
+indice_sil_jer_centrales_pca = cluster::silhouette(grupos_jerarquico_sil_pca_centrales, dist(centrales_num))
+indice_sil_kmeans_centrales_pca = cluster::silhouette(kmeans_pca_centrales$cluster, dist(centrales_num))  
+plotj = factoextra::fviz_silhouette(indice_sil_jer_centrales_pca)
+plotj
+plotk = factoextra::fviz_silhouette(indice_sil_kmeans_centrales_pca)
+plotk
+rand_sil_pca_centrales
+
+```
+
+El índice de Rand para estos clústers es `r rand_sil_pca_centrales`, que es bastante bajo por lo que son diferentes.
+Hagamos lo mismo con el índice de Calinski
+
+```{r ch_pca_defensas}
+indices_kmeans_ch_pca_centrales = purrr::map_dfr(ks, function(k){
+  set.seed(123)
+  km_pca_centrales = stats::kmeans(datos_pca_centrales_num, centers = k, nstart = 25, iter.max = 100)
+  
+  stats = fpc::cluster.stats(dist(datos_pca_centrales_num), km_pca_centrales$cluster)
+  
+  tibble(
+    k = k,
+    calinski = stats$ch     # Índice de Calinski-Harabasz
+  )
+})
+
+k_opt_kmeans_ch_pca_centrales = indices_kmeans_ch_pca_centrales$k[which.max(indices_kmeans_ch_pca_centrales$calinski)]
+
+indices_jerarquico_ch_pca_centrales = purrr::map_dfr(ks, function(k){
+  grupos=stats::cutree(jerarquico_pca_centrales, k = k)
+  
+  stats=fpc::cluster.stats(dist(datos_pca_centrales_num), grupos)
+  
+  tibble(
+    k = k,
+    calinski = stats$ch
+  )
+})
+
+k_opt_jerarquico_ch_pca_centrales=indices_jerarquico_ch_pca_centrales$k[which.max(indices_jerarquico_ch_pca_centrales$calinski)]
+```
+
+Entonces el número óptimo de clústers según el índice de CH son `r k_opt_kmeans_ch_pca_centrales` para k-means y `r k_opt_jerarquico_ch_pca_centrales` para jerárquico.
+
+```{r}
+indices_kmeans_ch_pca_centrales <- indices_kmeans_ch_pca_centrales %>%
+  mutate(metodo = "K-means PCA")
+
+indices_jerarquico_ch_pca_centrales <- indices_jerarquico_ch_pca_centrales %>%
+  mutate(metodo = "Jerárquico PCA")
+
+indices_ch_pca_centrales_total <- bind_rows(
+  indices_kmeans_ch_pca_centrales,
+  indices_jerarquico_ch_pca_centrales
+)
+
+ggplot(indices_ch_pca_centrales_total, aes(x = k, y = calinski, color = metodo)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 3) +
+  geom_point(
+    data = indices_ch_pca_centrales_total %>%
+      group_by(metodo) %>%
+      slice_max(calinski, n = 1, with_ties = FALSE),
+    size = 4
+  ) +
+  geom_text(
+    data = indices_ch_pca_centrales_total %>%
+      group_by(metodo) %>%
+      slice_max(calinski, n = 1, with_ties = FALSE),
+    aes(label = paste0("k = ", k)),
+    vjust = -1
+  ) +
+  labs(
+    x = "Número de clústeres (k)",
+    y = "Índice Calinski-Harabasz",
+    color = "Método"
+  ) +
+  theme_minimal()
+```
+
+```{r clustering_ch_pca_defensas}
+grupos_jerarquico_ch_pca_centrales = stats::cutree(jerarquico_pca_centrales, k = k_opt_jerarquico_ch_pca_centrales)
+centrales$cluster_jerarquico_ch_pca_centrales = grupos_jerarquico_ch_pca_centrales
+cluster_jugador_ch_jerarquico_pca_centrales = grupos_jerarquico_ch_pca_centrales[centrales$Jugador == jugador]
+kmeans_ch_pca_centrales = stats::kmeans(datos_pca_centrales_num, centers = k_opt_kmeans_ch_pca_centrales, nstart = 25, iter.max = 100)
+centrales$cluster_kmeans_ch_pca_centrales = kmeans_ch_pca_centrales$cluster
+cluster_jugador_ch_kmeans_pca_centrales = kmeans_ch_pca_centrales$cluster[centrales$Jugador == jugador]
+```
+
+
+### Candidatos a sustitutos
+
+```{r cantidad_sustitutos}
+cantidad_sustitutos = 10
+fila_jugador = datos_num[datos_jugadores$Jugador == jugador, ]
+```
+
+Entonces veamos que `r cantidad_sustitutos` jugadores son los más cercanos a él en todos los métodos que hemos hecho, miraremos con la base de datos completa, con los jugadores que estén en su clúster de cada método de clustering que hemos hecho, con el PCA sobre la base de datos completa, solo con los centrales y pivotes,...
+
+```{r sustitutos_total}
+distancias_jugador_total = apply(datos_num, 1, function(fila) {
+  sqrt(sum((fila-fila_jugador)^2))
+}) # Distancia Euclidea
+distancias_jugador_total = tibble(
+  Jugador = datos_jugadores$Jugador,
+  Distancia = as.numeric(distancias_jugador_total)
+) %>% arrange(Distancia) %>% filter(Distancia > 0)
+
+sustitutos = as.data.frame(distancias_jugador_total$Jugador[1:cantidad_sustitutos])
+colnames(sustitutos) = c("Total")
+```
+
+Mirando la distancia euclideana con los datos totales los posibles sustitutos son `r distancias_jugador_total$Jugador[1:cantidad_sustitutos]`
+
+Veamos ahora buscando solo en los jugadores que estén dentro de su cluster:
+
+```{r sustituos_sil_kmeans_total}
+
+# Kmeans silueta
+indices_cluster_sil_kmeans_total = datos_jugadores$cluster_kmeans_sil == cluster_jugador_sil_5means
+jugadores_cluster_sil_kmeans_total = datos_jugadores$Jugador[indices_cluster_sil_kmeans_total]
+datos_num_cluster_sil_kmeans_total = datos_num[indices_cluster_sil_kmeans_total, ]
+distancias_jugador_sil_kmeans_total = apply(datos_num_cluster_sil_kmeans_total, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador)^2))
+)
+distancias_jugador_sil_kmeans_total = tibble(
+  Jugador = jugadores_cluster_sil_kmeans_total,
+  Distancia = distancias_jugador_sil_kmeans_total
+) %>% arrange(Distancia)
+sustitutos$Sil_Kmeans_Total = distancias_jugador_sil_kmeans_total$Jugador[2: (cantidad_sustitutos+1)]
+
+# Jerarquico Silueta
+indices_cluster_sil_jerarquico_total = datos_jugadores$cluster_jerarquico_sil == cluster_jugador_sil_jerarquico
+jugadores_cluster_sil_jerarquico_total = datos_jugadores$Jugador[indices_cluster_sil_jerarquico_total]
+datos_num_cluster_sil_jerarquico_total = datos_num[indices_cluster_sil_jerarquico_total,]
+distancias_jugador_sil_jerarquico_total = apply(datos_num_cluster_sil_jerarquico_total, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador)^2))
+)
+distancias_jugador_sil_jerarquico_total = tibble(
+  Jugador = jugadores_cluster_sil_jerarquico_total,
+  Distancia = distancias_jugador_sil_jerarquico_total
+) %>% arrange(Distancia)
+sustitutos$Sil_Jerarquico_Total = distancias_jugador_sil_jerarquico_total$Jugador[2:(cantidad_sustitutos+1)]
+
+# Kmeans CH
+indices_cluster_ch_kmeans_total = datos_jugadores$cluster_kmeans_ch == cluster_jugador_ch_5means
+jugadores_cluster_ch_kmeans_total = datos_jugadores$Jugador[indices_cluster_ch_kmeans_total]
+datos_num_cluster_ch_kmeans_total = datos_num[indices_cluster_ch_kmeans_total, ]
+distancias_jugador_ch_kmeans_total = apply(datos_num_cluster_ch_kmeans_total, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador)^2))
+)
+distancias_jugador_ch_kmeans_total = tibble(
+  Jugador = jugadores_cluster_ch_kmeans_total,
+  Distancia = distancias_jugador_ch_kmeans_total
+) %>% arrange(Distancia)
+sustitutos$CH_Kmeans_Total = distancias_jugador_ch_kmeans_total$Jugador[2: (cantidad_sustitutos+1)]
+
+# Jerarquico CH
+indices_cluster_ch_jerarquico_total = datos_jugadores$cluster_jerarquico_ch == cluster_jugador_ch_jerarquico
+jugadores_cluster_ch_jerarquico_total = datos_jugadores$Jugador[indices_cluster_ch_jerarquico_total]
+datos_num_cluster_ch_jerarquico_total = datos_num[indices_cluster_ch_jerarquico_total,]
+distancias_jugador_ch_jerarquico_total = apply(datos_num_cluster_ch_jerarquico_total, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador)^2))
+)
+distancias_jugador_ch_jerarquico_total = tibble(
+  Jugador = jugadores_cluster_ch_jerarquico_total,
+  Distancia = distancias_jugador_ch_jerarquico_total
+) %>% arrange(Distancia)
+sustitutos$CH_Jerarquico_Total = distancias_jugador_ch_jerarquico_total$Jugador[2:(cantidad_sustitutos+1)]
+
+datos_jugadores_pca_total = datos_jugadores_pca # pca_total$x
+datos_jugadores_pca_total$Jugador = datos_jugadores$Jugador
+datos_jugadores_pca_num_total = datos_jugadores_pca_total %>%
+  select(where(is.numeric)) %>%
+  scale()
+
+fila_jugador_pca_total = datos_jugadores_pca_num_total[datos_jugadores_pca_total$Jugador == jugador, 1:20]
+
+# PCA Total ?!?!?!?!? Me da delanteros como los más cercanos, puede ser que sea porque el clustering está hecho con 20 variables y la distancia la calculo con todas? Aún así limitandolo a las 20 primeras me da cosas muy raras 
+distancias_jugador_pca_total = apply(datos_jugadores_pca_num_total, 1, function(fila)
+  sqrt(sum(fila-fila_jugador_pca_total)^2))
+distancias_jugador_pca_total = tibble(
+  Jugador = datos_jugadores$Jugador,
+  Distancia = as.numeric(distancias_jugador_pca_total)
+) %>% arrange(Distancia)
+sustitutos$Total_PCA = distancias_jugador_pca_total$Jugador[2:(cantidad_sustitutos+1)]
+
+# PCA KMeans Silueta
+indices_cluster_sil_kmeans_pca_total = datos_jugadores$cluster_kmeans_sil_pca == cluster_jugador_sil_kmeans_pca
+jugadores_cluster_sil_kmeans_pca_total = datos_jugadores$Jugador[indices_cluster_sil_kmeans_pca_total]
+datos_num_cluster_sil_kmeans_pca_total = datos_jugadores_pca_num_total[indices_cluster_sil_kmeans_pca_total, ]
+distancias_jugador_sil_kmeans_pca_total = apply(datos_num_cluster_sil_kmeans_pca_total, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador_pca_total)^2))
+)
+distancias_jugador_sil_kmeans_pca_total = tibble(
+  Jugador = jugadores_cluster_sil_kmeans_pca_total,
+  Distancia = distancias_jugador_sil_kmeans_pca_total
+) %>% arrange(Distancia)
+sustitutos$Sil_Kmeans_PCA_Total = distancias_jugador_sil_kmeans_pca_total$Jugador[2: (cantidad_sustitutos+1)]
+
+# PCA Jerarquico Silueta
+indices_cluster_sil_jerarquico_pca_total = datos_jugadores$cluster_jerarquico_sil_pca == cluster_jugador_sil_jerarquico_pca
+jugadores_cluster_sil_jerarquico_pca_total = datos_jugadores$Jugador[indices_cluster_sil_jerarquico_pca_total]
+datos_num_cluster_sil_jerarquico_pca_total = datos_jugadores_pca_num_total[indices_cluster_sil_jerarquico_pca_total,]
+distancias_jugador_sil_jerarquico_pca_total = apply(datos_num_cluster_sil_jerarquico_pca_total, 1 ,function(fila) 
+  sqrt(sum((fila - fila_jugador_pca_total)^2))
+)
+distancias_jugador_sil_jerarquico_pca_total = tibble(
+  Jugador = jugadores_cluster_sil_jerarquico_pca_total,
+  Distancia = distancias_jugador_sil_jerarquico_pca_total
+) %>% arrange(Distancia)
+sustitutos$Sil_Jerarquico_PCA_Total = distancias_jugador_sil_jerarquico_pca_total$Jugador[2:(cantidad_sustitutos+1)]
+
+# PCA KMeans CH
+indices_cluster_ch_kmeans_pca_total = datos_jugadores$cluster_kmeans_ch_pca == cluster_jugador_ch_kmeans_pca
+jugadores_cluster_ch_kmeans_pca_total = datos_jugadores$Jugador[indices_cluster_ch_kmeans_pca_total]
+datos_num_cluster_ch_kmeans_pca_total = datos_jugadores_pca_num_total[indices_cluster_ch_kmeans_pca_total, ]
+distancias_jugador_ch_kmeans_pca_total = apply(datos_num_cluster_ch_kmeans_pca_total, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador_pca_total)^2))
+)
+distancias_jugador_ch_kmeans_pca_total = tibble(
+  Jugador = jugadores_cluster_ch_kmeans_pca_total,
+  Distancia = distancias_jugador_ch_kmeans_pca_total
+) %>% arrange(Distancia)
+sustitutos$CH_Kmeans_PCA_Total = distancias_jugador_ch_kmeans_pca_total$Jugador[2: (cantidad_sustitutos+1)]
+
+# PCA Jerarquico CH
+indices_cluster_ch_jerarquico_pca_total = datos_jugadores$cluster_jerarquico_ch_pca == cluster_jugador_ch_jerarquico_pca
+jugadores_cluster_ch_jerarquico_pca_total = datos_jugadores$Jugador[indices_cluster_ch_jerarquico_pca_total]
+datos_num_cluster_ch_jerarquico_pca_total = datos_jugadores_pca_num_total[indices_cluster_ch_jerarquico_pca_total,]
+distancias_jugador_ch_jerarquico_pca_total = apply(datos_num_cluster_ch_jerarquico_pca_total, 1 ,function(fila) 
+  sqrt(sum((fila - fila_jugador_pca_total)^2))
+)
+distancias_jugador_ch_jerarquico_pca_total = tibble(
+  Jugador = jugadores_cluster_ch_jerarquico_pca_total,
+  Distancia = distancias_jugador_ch_jerarquico_pca_total
+) %>% arrange(Distancia)
+sustitutos$CH_Jerarquico_PCA_Total = distancias_jugador_ch_jerarquico_pca_total$Jugador[2:(cantidad_sustitutos+1)]
+
+
+fila_jugador_central = centrales_num[centrales$Jugador == jugador]
+  
+  
+# Centrales Kmeans Silueta 
+indices_cluster_sil_kmeans_centrales = centrales$cluster_kmeans_sil_centrales == cluster_jugador_kmeans_sil_centrales
+jugadores_cluster_sil_kmeans_centrales = centrales$Jugador[indices_cluster_sil_kmeans_centrales]
+datos_num_cluster_sil_kmeans_centrales = centrales_num[indices_cluster_sil_kmeans_centrales, ]
+distancias_jugador_sil_kmeans_centrales = apply(datos_num_cluster_sil_kmeans_centrales, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador_central)^2))
+)
+distancias_jugador_sil_kmeans_centrales = tibble(
+  Jugador = jugadores_cluster_sil_kmeans_centrales,
+  Distancia = distancias_jugador_sil_kmeans_centrales
+) %>% arrange(Distancia)
+sustitutos$Sil_Kmeans_Centrales = distancias_jugador_sil_kmeans_centrales$Jugador[2: (cantidad_sustitutos+1)]
+
+
+# Centrales Jerarquico Silueta
+indices_cluster_sil_jerarquico_centrales = centrales$cluster_jerarquico_sil_centrales == cluster_jugador_sil_jerarquico_centrales
+jugadores_cluster_sil_jerarquico_centrales = centrales$Jugador[indices_cluster_sil_jerarquico_centrales]
+datos_num_cluster_sil_jerarquico_centrales = centrales_num[indices_cluster_sil_jerarquico_centrales, ]
+distancias_jugador_sil_jerarquico_centrales = apply(datos_num_cluster_sil_jerarquico_centrales, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador_central)^2))
+)
+distancias_jugador_sil_jerarquico_centrales = tibble(
+  Jugador = jugadores_cluster_sil_jerarquico_centrales,
+  Distancia = distancias_jugador_sil_jerarquico_centrales
+) %>% arrange(Distancia)
+sustitutos$Sil_Jerarquico_Centrales = distancias_jugador_sil_jerarquico_centrales$Jugador[2: (cantidad_sustitutos+1)]
+
+
+# Centrales Kmeans CH
+indices_cluster_ch_kmeans_centrales = centrales$cluster_kmeans_ch_centrales == cluster_jugador_ch_kmeans_centrales
+jugadores_cluster_ch_kmeans_centrales = centrales$Jugador[indices_cluster_ch_kmeans_centrales]
+datos_num_cluster_ch_kmeans_centrales = centrales_num[indices_cluster_ch_kmeans_centrales, ]
+distancias_jugador_ch_kmeans_centrales = apply(datos_num_cluster_ch_kmeans_centrales, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador_central)^2))
+)
+distancias_jugador_ch_kmeans_centrales = tibble(
+  Jugador = jugadores_cluster_ch_kmeans_centrales,
+  Distancia = distancias_jugador_ch_kmeans_centrales
+) %>% arrange(Distancia)
+sustitutos$CH_Kmeans_Centrales = distancias_jugador_ch_kmeans_centrales$Jugador[2: (cantidad_sustitutos+1)]
+
+
+# Centrales Jerarquico CH
+indices_cluster_ch_jerarquico_centrales = centrales$cluster_jerarquico_ch_centrales == cluster_jugador_ch_jerarquico_centrales
+jugadores_cluster_ch_jerarquico_centrales = centrales$Jugador[indices_cluster_ch_jerarquico_centrales]
+datos_num_cluster_ch_jerarquico_centrales = centrales_num[indices_cluster_ch_jerarquico_centrales, ]
+distancias_jugador_ch_jerarquico_centrales = apply(datos_num_cluster_ch_jerarquico_centrales, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador_central)^2))
+)
+distancias_jugador_ch_jerarquico_centrales = tibble(
+  Jugador = jugadores_cluster_ch_jerarquico_centrales,
+  Distancia = distancias_jugador_ch_jerarquico_centrales
+) %>% arrange(Distancia)
+sustitutos$CH_Jerarquico_Centrales = distancias_jugador_ch_jerarquico_centrales$Jugador[2: (cantidad_sustitutos+1)]
+
+
+fila_jugador_central_pca = datos_pca_centrales_num[datos_pca_centrales$Jugador == jugador]
+
+# Centrales PCA Kmeans Silueta
+indices_cluster_sil_kmeans_pca_centrales = centrales$cluster_kmeans_sil_pca_centrales == cluster_jugador_sil_kmeans_pca_centrales
+jugadores_cluster_sil_kmeans_pca_centrales = centrales$Jugador[indices_cluster_sil_kmeans_pca_centrales]
+datos_num_cluster_sil_kmeans_pca_centrales = datos_pca_centrales_num[indices_cluster_sil_kmeans_pca_centrales, ]
+distancias_jugador_sil_kmeans_pca_centrales = apply(datos_num_cluster_sil_kmeans_pca_centrales, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador_central_pca)^2))
+)
+distancias_jugador_sil_kmeans_pca_centrales = tibble(
+  Jugador = jugadores_cluster_sil_kmeans_pca_centrales,
+  Distancia = distancias_jugador_sil_kmeans_pca_centrales
+) %>% arrange(Distancia)
+sustitutos$Sil_Kmeans_PCA_Centrales = distancias_jugador_sil_kmeans_pca_centrales$Jugador[2: (cantidad_sustitutos+1)]
+
+
+# Centrales PCA Jerarquico Silueta
+indices_cluster_sil_jerarquico_pca_centrales = centrales$cluster_jerarquico_sil_pca_centrales == cluster_jugador_sil_jerarquico_pca_centrales
+jugadores_cluster_sil_jerarquico_pca_centrales = centrales$Jugador[indices_cluster_sil_jerarquico_pca_centrales]
+datos_num_cluster_sil_jerarquico_pca_centrales = datos_pca_centrales_num[indices_cluster_sil_jerarquico_pca_centrales, ]
+distancias_jugador_sil_jerarquico_pca_centrales = apply(datos_num_cluster_sil_jerarquico_pca_centrales, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador_central_pca)^2))
+)
+distancias_jugador_sil_jerarquico_pca_centrales = tibble(
+  Jugador = jugadores_cluster_sil_jerarquico_pca_centrales,
+  Distancia = distancias_jugador_sil_jerarquico_pca_centrales
+) %>% arrange(Distancia)
+sustitutos$Sil_Jerarquico_PCA_Centrales = distancias_jugador_sil_jerarquico_pca_centrales$Jugador[2: (cantidad_sustitutos+1)]
+
+
+# Centrales PCA Kmeans CH
+indices_cluster_ch_kmeans_pca_centrales = centrales$cluster_kmeans_ch_pca_centrales == cluster_jugador_ch_kmeans_pca_centrales
+jugadores_cluster_ch_kmeans_pca_centrales = centrales$Jugador[indices_cluster_ch_kmeans_pca_centrales]
+datos_num_cluster_ch_kmeans_pca_centrales = datos_pca_centrales_num[indices_cluster_ch_kmeans_pca_centrales, ]
+distancias_jugador_ch_kmeans_pca_centrales = apply(datos_num_cluster_ch_kmeans_pca_centrales, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador_central_pca)^2))
+)
+distancias_jugador_ch_kmeans_pca_centrales = tibble(
+  Jugador = jugadores_cluster_ch_kmeans_pca_centrales,
+  Distancia = distancias_jugador_ch_kmeans_pca_centrales
+) %>% arrange(Distancia)
+sustitutos$CH_Kmeans_PCA_Centrales = distancias_jugador_ch_kmeans_pca_centrales$Jugador[2: (cantidad_sustitutos+1)]
+
+
+# Centrales PCA Jerarquico CH
+indices_cluster_ch_jerarquico_pca_centrales = centrales$cluster_jerarquico_ch_pca_centrales == cluster_jugador_ch_jerarquico_pca_centrales
+jugadores_cluster_ch_jerarquico_pca_centrales = centrales$Jugador[indices_cluster_ch_jerarquico_pca_centrales]
+datos_num_cluster_ch_jerarquico_pca_centrales = datos_pca_centrales_num[indices_cluster_ch_jerarquico_pca_centrales, ]
+distancias_jugador_ch_jerarquico_pca_centrales = apply(datos_num_cluster_ch_jerarquico_pca_centrales, 1,function(fila) 
+  sqrt(sum((fila - fila_jugador_central_pca)^2))
+)
+distancias_jugador_ch_jerarquico_pca_centrales = tibble(
+  Jugador = jugadores_cluster_ch_jerarquico_pca_centrales,
+  Distancia = distancias_jugador_ch_jerarquico_pca_centrales
+) %>% arrange(Distancia)
+sustitutos$CH_Jerarquico_PCA_Centrales = distancias_jugador_ch_jerarquico_pca_centrales$Jugador[2: (cantidad_sustitutos+1)]
+
+DT::datatable(sustitutos,
+  options = list(scrollX = TRUE, dom = 't')
+)
+
+```
+
+Entonces con los posibles sustitutos calculados, veamos quienes son nuestros candidatos finales
+
+```{r candidatos_finales}
+numero_candidatos_finales = 10
+sustitutos_vector = unlist(sustitutos)
+freq_jugadores = table(sustitutos_vector) 
+freq_jugadores = sort(freq_jugadores, decreasing = TRUE)
+jugadores_candidatos_finales = rownames(freq_jugadores)[1:numero_candidatos_finales]
+
+valores_de_mercado = tibble(
+  Jugador = c("Ko Itakura", "Charlie Cresswell", "Johan Vásquez", "Robin Koch", "James Tarkowski", "Marc-Oliver Kempf", "Alessio Romagnoli", "Hauke Wahl", "César Tárrega", "Scott McKenna", "Jaka Bijol", "Danilho Doekhi", "Matthijs de Ligt", "Saúl Coco", "Abdoulie Ceesay", "Dean Huijsen", "Diego Moreira", "Ferrán Ruiz", "Ifechukwu Ogbus", "Kai Havertz", "Omar Marmoush", "Pau Cubarsí", "Jean-Charles Castelletto", "Jay Idzes", "Alex Baena", "Kevin Schade", "Lorenzo Lucca", "Guillermo Maripán", "Maximilian Beier", "Willi Orban", "Dan Burn"),
+  Valor_de_Mercado_Transfermarkt = c(10, 15, 13, 15, 7, 3, 7, 1.5, 15, 4, 18, 13, 40, 9, 0.8, 70, 18, 0.025, 1, 55, 65, 80, 3.2, 10, 55,   35, 25, 4, 30, 6, 5)
+)
+candidatos = tibble(
+  Jugador = jugadores_candidatos_finales,
+  Año = datos_jugadores$Año_Nacimiento[match(jugadores_candidatos_finales, datos_jugadores$Jugador)],
+  Posición = datos_jugadores$Posicion_Detallada[match(jugadores_candidatos_finales, datos_jugadores$Jugador)],
+  Freq = freq_jugadores[1:numero_candidatos_finales]
+)
+
+candidatos_finales = left_join(candidatos, valores_de_mercado, by = "Jugador")
+
+DT::datatable(candidatos_finales,
+  options = list(scrollX = TRUE, dom = 't', pageLength = -1)
+)
+
+```
+
+### Sustitutos condicionados
+
+Como nuestro objetivo es encontrar sustitutos de `r jugador` vamos a hacer filtros en la edad de los jugadores para evitar encontrar sustitutos mayores que él. Su año de nacimiento es `r datos_jugadores$Año_Nacimiento[datos_jugadores$Jugador == jugador]`, primero eliminemos los jugadores del mismo año o anterior.
+Además vamos a limitar el número de minutos jugados a un mínimo de 900 minutos.
+
+```{r edad_jugador}
+año_jugador = datos_jugadores$Año_Nacimiento[datos_jugadores$Jugador == jugador]
+sustitutos_vector_edad = sustitutos_vector[
+  datos_jugadores$Año_Nacimiento[
+    match(sustitutos_vector, datos_jugadores$Jugador)
+  ] > año_jugador
+]
+sustitutos_vector_edad = sustitutos_vector[datos_jugadores$Minutos_totales[
+    match(sustitutos_vector, datos_jugadores$Jugador)
+  ] > 900
+]
+jugadores_eliminados = length(sustitutos_vector)-length(sustitutos_vector_edad)
+```
+
+Vemos que solo se han eliminado `r jugadores_eliminados` jugador(es). Asi que vamos a restringirlo más, según el estudio, el pico de rendimiento en centrales se alcanza (redondeando) a los 27 años, sufriendo la primera gran bajada a los 32 años. Entonces buscaremos jugadores nacidos en el año 1994 o superior y después que sean nacidos en el año 1998 o superior.
+
+```{r edad_bajada}
+año_bajada = 1994
+sustitutos_vector_edad_2 <- sustitutos_vector_edad[
+  datos_jugadores$Año_Nacimiento[
+    match(sustitutos_vector_edad, datos_jugadores$Jugador)
+  ] > año_bajada
+]
+jugadores_eliminados_2 = length(sustitutos_vector)-length(sustitutos_vector_edad_2)
+```
+
+En este caso, se han eliminado `r jugadores_eliminados_2` jugadores, veamos los sustitutos en este caso.
+
+```{r sustitutos_edad_bajada}
+freq_jugadores_2 = table(sustitutos_vector_edad_2) 
+freq_jugadores_2 = sort(freq_jugadores_2, decreasing = TRUE)
+jugadores_candidatos_finales_2 = rownames(freq_jugadores_2)[1:numero_candidatos_finales]
+candidatos_2 = tibble(
+  Jugador = jugadores_candidatos_finales_2,
+  Año = datos_jugadores$Año_Nacimiento[match(jugadores_candidatos_finales_2, datos_jugadores$Jugador)],
+  Posición = datos_jugadores$Posicion_Detallada[match(jugadores_candidatos_finales_2, datos_jugadores$Jugador)],
+  Freq = freq_jugadores_2[1:numero_candidatos_finales]
+)
+candidatos_finales_2 = left_join(candidatos_2, valores_de_mercado, by = "Jugador")
+
+DT::datatable(candidatos_finales_2,
+  options = list(scrollX = TRUE, dom = 't', pageLength = -1)
+)
+```
+
+```{r edad_pico}
+año_pico = 1998
+sustitutos_vector_edad_3 <- sustitutos_vector_edad[
+  datos_jugadores$Año_Nacimiento[
+    match(sustitutos_vector_edad, datos_jugadores$Jugador)
+  ] > año_pico
+]
+jugadores_eliminados_3 = length(sustitutos_vector)-length(sustitutos_vector_edad_3)
+```
+
+En este caso, se han eliminado `r jugadores_eliminados_3` jugadores, veamos los sustitutos en este caso.
+
+```{r sustitutos_edad_pico}
+freq_jugadores_3 = table(sustitutos_vector_edad_3) 
+freq_jugadores_3 = sort(freq_jugadores_3, decreasing = TRUE)
+jugadores_candidatos_finales_3 = rownames(freq_jugadores_3)[1:numero_candidatos_finales]
+candidatos_3 = tibble(
+  Jugador = jugadores_candidatos_finales_3,
+  Año = datos_jugadores$Año_Nacimiento[match(jugadores_candidatos_finales_3, datos_jugadores$Jugador)],
+  Posición = datos_jugadores$Posicion_Detallada[match(jugadores_candidatos_finales_3, datos_jugadores$Jugador)],
+  Freq = freq_jugadores_3[1:numero_candidatos_finales]
+)
+candidatos_finales_3 = left_join(candidatos_3, valores_de_mercado, by = "Jugador")
+
+DT::datatable(candidatos_finales_3,
+  options = list(scrollX = TRUE, dom = 't', pageLength = -1)
+)
+```
+
+En este caso, al limitar mucho los datos nos salen jugadores que no son centrales, que son los que salen con frecuencia 1, esto pasa porque al usar las 20 primeras variables en el PCA, le quitamos valor a las que realmente marcan a los centrales, como ya hemos comentado anteriormente.
+
+
+
