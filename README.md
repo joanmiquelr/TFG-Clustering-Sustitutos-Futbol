@@ -87,11 +87,13 @@ Todos los datos han sido utilizados exclusivamente con fines académicos y de in
 TFG-Clustering-Sustitutos-Futbol/
 │
 ├── Memoria/
-│   └── TFG.pdf
+│   └── TFG_Joan_Miquel_Rubi.pdf
 │
-├── R_Script/
-│   ├── TFG_Clustering.R
-│   └── Simulacion_FM.R
+├── QMD/
+│   ├── TFG_Clustering.qmd
+│   └── Plots_simulacion.qmd
+├── RFiles/
+│   └── Simulacion_Jerarquico_TFG
 │
 ├── Codigo_Python/
 │   └── WebScraping.py
